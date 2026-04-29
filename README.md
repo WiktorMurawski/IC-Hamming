@@ -22,7 +22,7 @@ and single-bit error correction.
 │               │  s2 = p2^d1^d3^d4 = 1^0^1^1 = 1            │
 │               │  s4 = p4^d2^d3^d4 = 0^0^1^1 = 0            │
 │               │  Syndrome (s4 s2 s1) = 0 1 1 = 3           │
-│               │  Error at bit 3 → flip received[2]         │
+│               │  Error at bit 3 → flip received[3]         │
 └───────────────┴────────────────────────────────────────────┘
 ```
 
