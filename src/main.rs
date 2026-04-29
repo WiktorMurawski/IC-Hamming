@@ -347,7 +347,7 @@ fn main() {
     }).collect();
 
     // ── Reset button ──────────────────────────────────────────────────────────
-    let mut reset_btn = Button::new(sb_x, sb_y + 188, sb_w - 4, 30, "↺  Reset errors");
+    let mut reset_btn = Button::new(sb_x, sb_y + 188, sb_w - 4, 30, "Reset errors");
     reset_btn.set_label_font(Font::CourierBold);
     reset_btn.set_label_size(12);
     reset_btn.set_color(c((18, 52, 22)));
