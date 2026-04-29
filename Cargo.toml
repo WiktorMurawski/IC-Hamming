@@ -1,0 +1,12 @@
+[package]
+name = "hamming"
+version = "0.1.0"
+edition = "2024"
+description = "Interactive Hamming(7,4) code visualizer"
+
+[[bin]]
+name = "hamming"
+path = "src/main.rs"
+
+[dependencies]
+fltk = { version = "1", features = ["fltk-bundled"] }
