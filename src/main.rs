@@ -129,23 +129,8 @@ fn main() {
     canvas.set_frame(FrameType::FlatBox);
     canvas.draw(move |f| {
         let s = state_for_draw.borrow();
-        draw_panel(&s, f.x() + sc(10), f.y() + sc(10), f.width() - sc(20));
+        draw_panel(&s, f.x() + sc(10), f.y() + sc(10), f.width() - sc(20), f.height() - sc(20));
     });
-
-    // ── Bottom-right label ────────────────────────────────────────────────────
-    let label_w = sc(200);
-    let label_h = sc(24);
-    let mut bottom_label = Frame::new(
-        win_w - label_w - sc(8),
-        win_h - label_h - sc(8),
-        label_w,
-        label_h,
-        "Wiktor Murawski, Wiktor Pańczak, Mikołaj Złotek",
-    );
-    bottom_label.set_label_color(c(COL_MUTED));
-    bottom_label.set_label_font(Font::Courier);
-    bottom_label.set_label_size(sc(14));
-    bottom_label.set_align(Align::Right | Align::Inside);
 
     wind.end();
     wind.show();

@@ -2,7 +2,7 @@ use fltk::{
     draw,
     enums::{Align, Color, Font},
 };
-
+use fltk::frame::Frame;
 use crate::state::HammingState;
 
 // ─── Global scale factor ─────────────────────────────────────────────────────
@@ -42,7 +42,7 @@ pub fn c(rgb: (u8, u8, u8)) -> Color {
 // ─── Canvas drawing ──────────────────────────────────────────────────────────
 
 /// Draw the visualization panel inside the canvas frame.
-pub fn draw_panel(s: &HammingState, x: i32, y: i32, w: i32) {
+pub fn draw_panel(s: &HammingState, x: i32, y: i32, w: i32, h: i32) {
     // ── Bit grid ─────────────────────────────────────────────────────────────
     let cell_w = sc(54);
     let cell_h = sc(46);
@@ -217,11 +217,21 @@ pub fn draw_panel(s: &HammingState, x: i32, y: i32, w: i32) {
     draw::set_font(Font::Courier, sc(12));
     draw::set_draw_color(c(COL_MUTED));
     draw::draw_text2(
-        "Error position = 4·s4 + 2·s2 + 1·s1   (syndrome bits form a binary address)",
+        "Error position = 4·s4 + 2·s2 + 1·s1 ",
         x + sc(16),
         exp_y + sc(6),
         w - sc(32),
         sc(17),
         Align::Left,
+    );
+
+    // ── Bottom-right label ───────────────────────────────────────────────────
+    draw::set_font(Font::Courier, sc(14));
+    draw::set_draw_color(c(COL_MUTED));
+    draw::draw_text2(
+        "Wiktor Murawski, Wiktor Pańczak, Mikołaj Złotek",
+        x, y + h - sc(10),
+        w, sc(17),
+        Align::Right,
     );
 }
