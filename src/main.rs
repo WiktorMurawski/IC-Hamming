@@ -1,22 +1,18 @@
-//! Hamming(7,4) Interactive Visualizer
-//!
-//! Controls:
-//!   • d1–d4 buttons (top-left): toggle input data bits
-//!   • [1]–[7] buttons: flip individual received bits to simulate errors
-//!   • "Reset errors" button: restore received word = codeword
-//!
-//! The canvas shows:
-//!   • Codeword row  – the correctly encoded 7-bit word
-//!   • Received row  – the word "seen" after the channel (with injected errors)
-//!   • Corrected row – result after Hamming syndrome correction
-//!   • Syndrome formulas evaluated live
-//!   • Parity coverage legend
+mod drawing;
+mod hamming;
+mod state;
+
+use drawing::{c, sc, draw_panel};
+use drawing::{
+    BG_DEEP, BG_PANEL, COL_ACCENT, COL_FG, COL_GREEN, COL_MUTED, COL_RED, COL_PURPLE,
+};
+use state::HammingState;
+use hamming::hamming_encode;
 
 use fltk::{
     app,
     button::Button,
-    draw,
-    enums::{Align, Color, Font, FrameType},
+    enums::{Align, Font, FrameType},
     frame::Frame,
     prelude::*,
     window::Window,
@@ -24,283 +20,12 @@ use fltk::{
 use std::cell::RefCell;
 use std::rc::Rc;
 
-// ─── Global scale factor ─────────────────────────────────────────────────────
-//
-// Change SCALE to resize everything proportionally.
-// 1.0 = original size, 1.3 = 30% larger, 1.5 = 50% larger, etc.
-
-const SCALE: f32 = 1.4;
-
-/// Scale a pixel/font value by the global SCALE factor.
-fn sc(n: i32) -> i32 {
-    (n as f32 * SCALE) as i32
-}
-
-// ─── Hamming(7,4) core ───────────────────────────────────────────────────────
-//
-// Bit layout (1-indexed positions):
-//   pos 1 → p1  (parity, covers 1,3,5,7)
-//   pos 2 → p2  (parity, covers 2,3,6,7)
-//   pos 3 → d1  (data)
-//   pos 4 → p4  (parity, covers 4,5,6,7)
-//   pos 5 → d2  (data)
-//   pos 6 → d3  (data)
-//   pos 7 → d4  (data)
-
-/// Encode 4 data bits into a 7-bit Hamming codeword.
-fn hamming_encode(data: [u8; 4]) -> [u8; 7] {
-    let [d1, d2, d3, d4] = data;
-    let p1 = d1 ^ d2 ^ d4;        // positions 1,3,5,7
-    let p2 = d1 ^ d3 ^ d4;        // positions 2,3,6,7
-    let p4 = d2 ^ d3 ^ d4;        // positions 4,5,6,7
-    [p1, p2, d1, p4, d2, d3, d4]
-}
-
-/// Compute syndrome from a received 7-bit word.
-/// Returns ([s1,s2,s4], error_position).
-/// error_position == 0 means no error.
-fn hamming_syndrome(word: [u8; 7]) -> ([u8; 3], usize) {
-    let [r1, r2, r3, r4, r5, r6, r7] = word;
-    let s1 = r1 ^ r3 ^ r5 ^ r7;   // check positions 1,3,5,7
-    let s2 = r2 ^ r3 ^ r6 ^ r7;   // check positions 2,3,6,7
-    let s4 = r4 ^ r5 ^ r6 ^ r7;   // check positions 4,5,6,7
-    let error_pos = (s4 as usize) * 4 + (s2 as usize) * 2 + (s1 as usize);
-    ([s1, s2, s4], error_pos)
-}
-
-/// Correct a single-bit error given the syndrome error position.
-fn hamming_correct(mut word: [u8; 7], error_pos: usize) -> [u8; 7] {
-    if error_pos >= 1 && error_pos <= 7 {
-        word[error_pos - 1] ^= 1;
-    }
-    word
-}
-
-// ─── Application state ───────────────────────────────────────────────────────
-
-#[derive(Clone)]
-struct HammingState {
-    /// The 4 input data bits [d1,d2,d3,d4]
-    data: [u8; 4],
-    /// Encoded 7-bit codeword
-    codeword: [u8; 7],
-    /// "Received" word (may have injected errors)
-    received: [u8; 7],
-    /// Syndrome bits [s1, s2, s4]
-    syndrome: [u8; 3],
-    /// Bit position of detected error (0 = none)
-    error_pos: usize,
-    /// Word after correction
-    corrected: [u8; 7],
-}
-
-impl HammingState {
-    fn new() -> Self {
-        let data = [1, 0, 1, 1];
-        let codeword = hamming_encode(data);
-        let received = codeword;
-        let (syndrome, error_pos) = hamming_syndrome(received);
-        let corrected = hamming_correct(received, error_pos);
-        HammingState { data, codeword, received, syndrome, error_pos, corrected }
-    }
-
-    fn recompute(&mut self) {
-        self.codeword = hamming_encode(self.data);
-        let (syn, ep) = hamming_syndrome(self.received);
-        self.syndrome = syn;
-        self.error_pos = ep;
-        self.corrected = hamming_correct(self.received, ep);
-    }
-}
-
-// ─── Drawing ─────────────────────────────────────────────────────────────────
-
-const BG_DEEP:    (u8,u8,u8) = (18, 18, 32);
-const BG_PANEL:   (u8,u8,u8) = (24, 24, 44);
-const BG_PARITY:  (u8,u8,u8) = (40, 28, 72);
-const BG_DATA:    (u8,u8,u8) = (22, 36, 60);
-const BG_ERR:     (u8,u8,u8) = (88, 18, 18);
-const BG_FIX:     (u8,u8,u8) = (18, 72, 32);
-
-const COL_ACCENT: (u8,u8,u8) = (99, 179, 237);
-const COL_GREEN:  (u8,u8,u8) = (72, 199, 142);
-const COL_RED:    (u8,u8,u8) = (252, 110, 110);
-const COL_YELLOW: (u8,u8,u8) = (246, 211, 101);
-const COL_PURPLE: (u8,u8,u8) = (183, 148, 246);
-const COL_FG:     (u8,u8,u8) = (226, 232, 240);
-const COL_MUTED:  (u8,u8,u8) = (100, 116, 139);
-
-fn c(rgb: (u8,u8,u8)) -> Color { Color::from_rgb(rgb.0, rgb.1, rgb.2) }
-
-/// Draw the visualization panel inside the canvas frame.
-fn draw_panel(s: &HammingState, x: i32, y: i32, w: i32) {
-    // ── Bit grid ─────────────────────────────────────────────────────────────
-    let cell_w = sc(54);
-    let cell_h = sc(46);
-    let total_w = 7 * cell_w;
-    let bx = x + (w - total_w) / 2;  // center the grid
-
-    let col_labels  = ["p1","p2","d1","p4","d2","d3","d4"];
-    let is_parity   = [true, true, false, true, false, false, false];
-
-    // Column headers
-    draw::set_font(Font::CourierBold, sc(13));
-    for i in 0..7usize {
-        let cx = bx + i as i32 * cell_w;
-        draw::set_draw_color(if is_parity[i] { c(COL_PURPLE) } else { c(COL_ACCENT) });
-        draw::draw_text2(col_labels[i], cx, y + sc(4), cell_w, sc(16), Align::Center);
-    }
-    draw::set_font(Font::Courier, sc(10));
-    draw::set_draw_color(c(COL_MUTED));
-    for i in 0..7usize {
-        let cx = bx + i as i32 * cell_w;
-        draw::draw_text2(&format!("pos {}", i+1), cx, y + sc(19), cell_w, sc(13), Align::Center);
-    }
-
-    // Three rows: codeword, received, corrected
-    let row_defs: [(&str, [u8;7], (u8,u8,u8)); 3] = [
-        ("Codeword",  s.codeword,  COL_GREEN),
-        ("Received",  s.received,  COL_YELLOW),
-        ("Corrected", s.corrected, COL_ACCENT),
-    ];
-
-    for (ri, (row_label, bits, row_col)) in row_defs.iter().enumerate() {
-        let ry = y + sc(38) + ri as i32 * (cell_h + sc(10));
-
-        // Row label
-        draw::set_font(Font::CourierBold, sc(12));
-        draw::set_draw_color(c(*row_col));
-        draw::draw_text2(row_label, x, ry, bx - x - 6, cell_h, Align::Right | Align::Center);
-
-        for i in 0..7usize {
-            let cx = bx + i as i32 * cell_w;
-            let bit = bits[i];
-            let is_err = ri == 1 && s.error_pos == i + 1;
-            let is_fix = ri == 2 && s.error_pos != 0 && s.error_pos == i + 1;
-
-            // Cell background
-            let bg = if is_err { c(BG_ERR) }
-            else if is_fix  { c(BG_FIX) }
-            else if is_parity[i] { c(BG_PARITY) }
-            else { c(BG_DATA) };
-            draw::set_draw_color(bg);
-            draw::draw_rectf(cx + 3, ry + 3, cell_w - 6, cell_h - 6);
-
-            // Border
-            let border = if is_err { c(COL_RED) }
-            else if is_fix { c(COL_GREEN) }
-            else if is_parity[i] { c(COL_PURPLE) }
-            else { c(COL_MUTED) };
-            draw::set_draw_color(border);
-            draw::draw_rect(cx + 3, ry + 3, cell_w - 6, cell_h - 6);
-
-            // Bit digit
-            draw::set_font(Font::CourierBold, sc(22));
-            draw::set_draw_color(c(COL_FG));
-            draw::draw_text2(&bit.to_string(), cx, ry + 2, cell_w, cell_h - sc(10), Align::Center);
-
-            // ERR / FIX tag
-            if is_err || is_fix {
-                draw::set_font(Font::CourierBold, sc(9));
-                let tag_col = if is_err { c(COL_RED) } else { c(COL_GREEN) };
-                let tag_str = if is_err { "ERR" } else { "FIX" };
-                draw::set_draw_color(tag_col);
-                draw::draw_text2(tag_str, cx, ry + cell_h - sc(16), cell_w, sc(12), Align::Center);
-            }
-        }
-    }
-
-    // ── Separator ────────────────────────────────────────────────────────────
-    let sep_y = y + sc(38) + 3 * (cell_h + sc(10)) + sc(6);
-    draw::set_draw_color(c(COL_MUTED));
-    draw::draw_line(x + 4, sep_y, x + w - 4, sep_y);
-
-    // ── Syndrome formulas ────────────────────────────────────────────────────
-    draw::set_font(Font::CourierBold, sc(14));
-    draw::set_draw_color(c(COL_ACCENT));
-    draw::draw_text2("Syndrome Calculation", x, sep_y + sc(8), w, sc(20), Align::Center);
-
-    let [r1,r2,r3,r4,r5,r6,r7] = s.received;
-    let [s1,s2,s4] = s.syndrome;
-
-    let formulas = [
-        format!("s1  =  p1 ^ d1 ^ d2 ^ d4   =   {} ^ {} ^ {} ^ {}   =   {}", r1, r3, r5, r7, s1),
-        format!("s2  =  p2 ^ d1 ^ d3 ^ d4   =   {} ^ {} ^ {} ^ {}   =   {}", r2, r3, r6, r7, s2),
-        format!("s4  =  p4 ^ d2 ^ d3 ^ d4   =   {} ^ {} ^ {} ^ {}   =   {}", r4, r5, r6, r7, s4),
-    ];
-
-    draw::set_font(Font::Courier, sc(13));
-    draw::set_draw_color(c(COL_PURPLE));
-    for (fi, formula) in formulas.iter().enumerate() {
-        draw::draw_text2(formula, x + sc(16), sep_y + sc(32) + fi as i32 * sc(22), w - sc(32), sc(20), Align::Left);
-    }
-
-    // Syndrome result
-    let syndrome_val = (s4 as usize) * 4 + (s2 as usize) * 2 + (s1 as usize);
-    let res_y = sep_y + sc(32) + 3 * sc(22) + sc(6);
-
-    draw::set_draw_color(c(COL_MUTED));
-    draw::draw_line(x + sc(16), res_y, x + w - sc(16), res_y);
-
-    draw::set_font(Font::CourierBold, sc(13));
-    draw::set_draw_color(c(COL_ACCENT));
-    draw::draw_text2(
-        &format!("Syndrome  (s4 s2 s1)  =  {} {} {}  =  {} in decimal",
-                 s4, s2, s1, syndrome_val),
-        x + sc(16), res_y + sc(6), w - sc(32), sc(20), Align::Left);
-
-    let (msg, msg_col) = if s.error_pos == 0 {
-        ("✓  Syndrome = 0 — no error detected".to_string(), c(COL_GREEN))
-    } else {
-        (format!("✗  Syndrome = {} → error at bit position {}  →  flip received[{}]",
-                 syndrome_val, s.error_pos, s.error_pos), c(COL_RED))
-    };
-    draw::set_font(Font::CourierBold, sc(14));
-    draw::set_draw_color(msg_col);
-    draw::draw_text2(&msg, x + sc(16), res_y + sc(28), w - sc(32), sc(22), Align::Left);
-
-    // ── Coverage legend ──────────────────────────────────────────────────────
-    let leg_y = res_y + sc(58);
-    draw::set_draw_color(c(COL_MUTED));
-    draw::draw_line(x + 4, leg_y, x + w - 4, leg_y);
-
-    draw::set_font(Font::CourierBold, sc(13));
-    draw::set_draw_color(c(COL_ACCENT));
-    draw::draw_text2("Parity Bit Coverage", x, leg_y + sc(6), w, sc(18), Align::Center);
-
-    let coverages = [
-        ("p1", "covers positions 1, 3, 5, 7  →  checks d1, d2, d4"),
-        ("p2", "covers positions 2, 3, 6, 7  →  checks d1, d3, d4"),
-        ("p4", "covers positions 4, 5, 6, 7  →  checks d2, d3, d4"),
-    ];
-    draw::set_font(Font::Courier, sc(12));
-    for (ci, (name, desc)) in coverages.iter().enumerate() {
-        let ly = leg_y + sc(26) + ci as i32 * sc(19);
-        draw::set_draw_color(c(COL_PURPLE));
-        draw::draw_text2(name, x + sc(16), ly, sc(28), sc(17), Align::Left);
-        draw::set_draw_color(c(COL_FG));
-        draw::draw_text2(desc, x + sc(46), ly, w - sc(62), sc(17), Align::Left);
-    }
-
-    // How error position is determined
-    let exp_y = leg_y + sc(26) + 3 * sc(19) + sc(6);
-    draw::set_draw_color(c(COL_MUTED));
-    draw::draw_line(x + 4, exp_y, x + w - 4, exp_y);
-    draw::set_font(Font::Courier, sc(12));
-    draw::set_draw_color(c(COL_MUTED));
-    draw::draw_text2(
-        "Error position = 4·s4 + 2·s2 + 1·s1",
-        x + sc(16), exp_y + sc(6), w - sc(32), sc(17), Align::Left);
-}
-
-// ─── Main ────────────────────────────────────────────────────────────────────
-
 fn main() {
     let app = app::App::default();
     app::set_background_color(BG_DEEP.0, BG_DEEP.1, BG_DEEP.2);
     app::set_foreground_color(COL_FG.0, COL_FG.1, COL_FG.2);
 
-    let (win_w, win_h) = (sc(900), sc(650));
+    let (win_w, win_h) = (sc(900), sc(600));
     let mut wind = Window::new(100, 80, win_w, win_h, "Hamming(7,4) Code Visualizer");
     wind.set_color(c(BG_DEEP));
 
@@ -308,24 +33,27 @@ fn main() {
 
     // ── Title bar ─────────────────────────────────────────────────────────────
     let title_h = sc(46);
-    let mut title = Frame::new(0, 0, win_w, title_h, "Hamming(7,4)  —  Interactive Error Correction Visualizer");
+    let mut title = Frame::new(
+        0, 0, win_w, title_h,
+        "Hamming(7,4)  —  Interactive Error Correction Visualizer",
+    );
     title.set_color(c((24, 24, 50)));
     title.set_frame(FrameType::FlatBox);
     title.set_label_color(c(COL_ACCENT));
     title.set_label_font(Font::CourierBold);
-    title.set_label_size(sc(17));
+    title.set_label_size(sc(20));
 
     // ── Left sidebar ──────────────────────────────────────────────────────────
     let sb_x = sc(8);
     let sb_y = sc(54);
     let sb_w = sc(190);
-    let btn_spacing = sc(46);   // horizontal step between buttons
-    let btn_size    = sc(42);   // button width and height
+    let btn_spacing = sc(46);
+    let btn_size    = sc(42);
 
     let mut lbl_data = Frame::new(sb_x, sb_y, sb_w, sc(17), "Data bits (toggle)");
     lbl_data.set_label_color(c(COL_GREEN));
     lbl_data.set_label_font(Font::CourierBold);
-    lbl_data.set_label_size(sc(13));
+    lbl_data.set_label_size(sc(14));
 
     let (tx, rx) = app::channel::<(u8, u8)>();
 
@@ -334,9 +62,10 @@ fn main() {
         let mut btn = Button::new(
             sb_x + i as i32 * btn_spacing,
             sb_y + sc(19),
-            btn_size, btn_size, "");
+            btn_size, btn_size, "",
+        );
         btn.set_label_font(Font::CourierBold);
-        btn.set_label_size(sc(15));
+        btn.set_label_size(sc(16));
         btn.set_color(c((30, 52, 85)));
         btn.set_label_color(c(COL_FG));
         btn.set_frame(FrameType::RoundedBox);
@@ -348,7 +77,7 @@ fn main() {
     let mut lbl_err = Frame::new(sb_x, sb_y + sc(70), sb_w, sc(16), "Inject error (flip bit)");
     lbl_err.set_label_color(c(COL_RED));
     lbl_err.set_label_font(Font::CourierBold);
-    lbl_err.set_label_size(sc(13));
+    lbl_err.set_label_size(sc(14));
 
     let mut err_btns: Vec<Button> = (0..7usize).map(|i| {
         let row = i / 4;
@@ -356,7 +85,8 @@ fn main() {
         let mut btn = Button::new(
             sb_x + col as i32 * btn_spacing,
             sb_y + sc(88) + row as i32 * btn_spacing,
-            btn_size, btn_size, "");
+            btn_size, btn_size, "",
+        );
         btn.set_label_font(Font::CourierBold);
         btn.set_label_size(sc(14));
         btn.set_color(c((55, 18, 18)));
@@ -375,7 +105,7 @@ fn main() {
     reset_btn.set_frame(FrameType::RoundedBox);
     reset_btn.emit(tx.clone(), (2u8, 0u8));
 
-    // ── Legend labels ─────────────────────────────────────────────────────────
+    // ── Legend ────────────────────────────────────────────────────────────────
     let legend_text = "Legend:\n\
                        Purple = parity bit\n\
                        Blue   = data bit\n\
@@ -402,8 +132,7 @@ fn main() {
         draw_panel(&s, f.x() + sc(10), f.y() + sc(10), f.width() - sc(20));
     });
 
-    // ── Authors ───────────────────────────────────────────────────────────────
-    let text = "Wiktor Murawski, Wiktor Pańczak, Mikołaj Złotek";
+    // ── Bottom-right label ────────────────────────────────────────────────────
     let label_w = sc(200);
     let label_h = sc(24);
     let mut bottom_label = Frame::new(
@@ -411,11 +140,11 @@ fn main() {
         win_h - label_h - sc(8),
         label_w,
         label_h,
-        text,
+        "Wiktor Murawski, Wiktor Pańczak, Mikołaj Złotek",
     );
     bottom_label.set_label_color(c(COL_MUTED));
     bottom_label.set_label_font(Font::Courier);
-    bottom_label.set_label_size(sc(16));
+    bottom_label.set_label_size(sc(14));
     bottom_label.set_align(Align::Right | Align::Inside);
 
     wind.end();
@@ -438,7 +167,6 @@ fn main() {
     // ── Event loop ────────────────────────────────────────────────────────────
     while app.wait() {
         if let Some((kind, idx)) = rx.recv() {
-            // Mutate state
             {
                 let mut s = state.borrow_mut();
                 match kind {
@@ -460,7 +188,6 @@ fn main() {
                 }
             }
 
-            // Update sidebar button labels
             {
                 let s = state.borrow();
                 for (i, btn) in data_btns.borrow_mut().iter_mut().enumerate() {
@@ -469,7 +196,7 @@ fn main() {
                 for (i, btn) in err_btns.borrow_mut().iter_mut().enumerate() {
                     btn.set_label(&format!("[{}]\n{}", i + 1, s.received[i]));
                     btn.set_color(if s.error_pos == i + 1 {
-                        c((100, 18, 18))  // highlight if this is the error bit
+                        c((100, 18, 18))
                     } else {
                         c((55, 18, 18))
                     });
